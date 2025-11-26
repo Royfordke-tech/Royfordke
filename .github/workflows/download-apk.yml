@@ -1,0 +1,104 @@
+name: Download APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      method:
+        description: 'Download method: url or release'
+        required: true
+        default: 'url'
+      apk_url:
+        description: 'Direct URL to APK (used when method=url)'
+        required: false
+      release_owner:
+        description: 'Owner of the repo containing the release (used when method=release)'
+        required: false
+      release_repo:
+        description: 'Repo name containing the release (used when method=release)'
+        required: false
+      release_tag:
+        description: 'Release tag (leave empty for latest) (used when method=release)'
+        required: false
+      asset_name:
+        description: 'Name of the APK asset in the release (used when method=release)'
+        required: false
+
+jobs:
+  download-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare workspace
+        run: |
+          rm -f downloaded-app.apk
+          echo "Method: ${{ github.event.inputs.method }}"
+
+      - name: Download APK from direct URL
+        if: ${{ github.event.inputs.method == 'url' }}
+        run: |
+          APK_URL="${{ github.event.inputs.apk_url }}"
+          if [ -z "$APK_URL" ]; then
+            echo "apk_url input is required when method=url"
+            exit 1
+          fi
+          echo "Downloading APK from $APK_URL"
+          curl -fL "$APK_URL" -o downloaded-app.apk
+          echo "Downloaded size: $(stat -c%s downloaded-app.apk || true) bytes"
+
+      - name: Download APK from GitHub release
+        if: ${{ github.event.inputs.method == 'release' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="${{ github.event.inputs.release_owner }}"
+          REPO="${{ github.event.inputs.release_repo }}"
+          TAG="${{ github.event.inputs.release_tag }}"
+          ASSET_NAME="${{ github.event.inputs.asset_name }}"
+
+          if [ -z "$OWNER" ] || [ -z "$REPO" ] || [ -z "$ASSET_NAME" ]; then
+            echo "release_owner, release_repo and asset_name are required when method=release"
+            exit 1
+          fi
+
+          echo "Looking up release for ${OWNER}/${REPO} tag='${TAG:-latest}'"
+
+          if [ -z "$TAG" ]; then
+            release_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${OWNER}/${REPO}/releases/latest")
+          else
+            release_json=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/${OWNER}/${REPO}/releases/tags/${TAG}")
+          fi
+
+          asset_id=$(echo "$release_json" | jq -r --arg NAME "$ASSET_NAME" '.assets[] | select(.name == $NAME) | .id // empty')
+
+          if [ -z "$asset_id" ]; then
+            echo "Asset named '$ASSET_NAME' not found in release"
+            echo "Available assets:"
+            echo "$release_json" | jq -r '.assets[] | " - " + .name'
+            exit 1
+          fi
+
+          echo "Found asset id: $asset_id. Downloading..."
+          # The releases/assets endpoint requires Accept: application/octet-stream to get the binary
+          curl -L -H "Authorization: token $GITHUB_TOKEN" -H "Accept: application/octet-stream" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${asset_id}" \
+            -o downloaded-app.apk
+
+          echo "Downloaded size: $(stat -c%s downloaded-app.apk || true) bytes"
+
+      - name: Verify APK file
+        run: |
+          if [ ! -f downloaded-app.apk ]; then
+            echo "APK file not found"
+            exit 1
+          fi
+          file downloaded-app.apk || true
+          ls -lh downloaded-app.apk || true
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk
+          path: downloaded-app.apk
+
+      - name: Output download instructions
+        run: |
+          echo "APK saved to workflow artifact named 'apk'. Download it from the workflow run artifacts."
