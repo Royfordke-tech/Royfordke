@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>ROYFORD DATA DEALS</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 2rem auto; }
+    .pkg { border: 1px solid #ddd; padding: 12px; margin-bottom: 10px; border-radius: 6px; }
+    .pkg h3 { margin: 0 0 6px; }
+    .btn { background: #0b6; color: #fff; padding: 8px 12px; border: none; border-radius: 4px; cursor: pointer; }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    .note { font-size: 0.9rem; color: #555; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <h1>ROYFORD DATA DEALS – HATA NA OKOA YA MITA DATA BADO INAKAM</h1>
+  <p class="note">Instant Delivery – Within seconds!!!</p>
+  <p><strong>TILL:</strong> <code><%= till %></code></p>
+  <p class="note">The bundles will be auto-loaded to the number used in making payment. 1 purchase per number per day (see exceptions in UI).</p>
+
+  <div>
+    <% packages.forEach(function(p){ %>
+      <div class="pkg" data-id="<%= p.id %>" data-price="<%= p.price %>">
+        <h3><%= p.name %> — Ksh <%= p.price %></h3>
+        <p>Validity: <strong><%= p.validity %></strong></p>
+        <p><small><%= p.allowMultiple ? 'Multiple purchases allowed per day for this package.' : 'Only one purchase per number per day for this package.' %></small></p>
+        <div>
+          <input type="text" class="phone" placeholder="Enter phone (07..., 7..., 254...)" />
+          <button class="btn buy">Pay with M-PESA</button>
+        </div>
+        <div class="status" style="margin-top:8px;"></div>
+      </div>
+    <% }) %>
+  </div>
+
+  <script>
+    document.querySelectorAll('.pkg').forEach(function(el){
+      el.querySelector('.buy').addEventListener('click', async function(){
+        const phoneInput = el.querySelector('.phone').value.trim();
+        const packageId = el.getAttribute('data-id');
+        const status = el.querySelector('.status');
+        if (!phoneInput) {
+          status.innerText = 'Enter a phone number.';
+          return;
+        }
+        status.innerText = 'Initiating STK Push...';
+        this.disabled = true;
+        try {
+          const res = await fetch('/pay', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: phoneInput, packageId })
+          });
+          const data = await res.json();
+          if (!res.ok) {
+            status.innerText = 'Error: ' + (data.error || JSON.stringify(data));
+            this.disabled = false;
+            return;
+          }
+          status.innerText = 'STK Push sent. Please complete payment on your phone. Waiting for confirmation...';
+
+          const checkInterval = setInterval(async () => {
+            const txs = await fetch('/admin/transactions').then(r => r.json());
+            const normPhone = phoneInput.replace(/\s+/g,'').replace(/^\+/, '');
+            const list = Object.keys(txs).find(k => k.includes(normPhone) || k.includes(phoneInput) || k === '254'+phoneInput.replace(/^0/,''));
+            let found = null;
+            if (list && txs[list]) {
+              for (const t of txs[list]) {
+                if (t.packageId === packageId) {
+                  found = t;
+                  break;
+                }
+              }
+            }
+            if (found) {
+              if (found.status === 'SUCCESS') {
+                status.innerText = 'Payment confirmed and bundle provisioned (or provisioning in progress). Thank you!';
+                clearInterval(checkInterval);
+                this.disabled = false;
+              } else if (found.status === 'FAILED') {
+                status.innerText = 'Payment failed or cancelled.';
+                clearInterval(checkInterval);
+                this.disabled = false;
+              }
+            }
+          }, 5000);
+
+        } catch (err) {
+          status.innerText = 'Failed to initiate payment: ' + err.message;
+          this.disabled = false;
+        }
+      });
+    });
+  </script>
+</body>
+</html>
